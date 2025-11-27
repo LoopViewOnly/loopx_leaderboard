@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="shortcut icon" href="favicon.jpg" type="image/x-icon">
+    <title>LoopX Leaderboard</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Lucide Icons for aesthetic elements -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        /* Set the Inter font as default */
+        html { font-family: 'Inter', sans-serif; }
+        
+        /* Black to Blue Gradient Background */
+        body {
+            background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%);
+            min-height: 100vh;
+        }
+
+        /* Glassy Card Style (Future/Aero effect) */
+        .glassy-card {
+            /* Semi-transparent background */
+            background-color: rgba(255, 255, 255, 0.08); 
+            /* Subtle light border */
+            border: 1px solid rgba(255, 255, 255, 0.15); 
+            /* The key for the 'glass' look */
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            /* Soft shadow */
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1), 0 1px 3px rgba(0, 0, 0, 0.06);
+        }
+
+        /* Simple spinning animation for loading */
+        .animate-spin-slow {
+            animation: spin 3s linear infinite;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="text-slate-100 p-4 md:p-8">
+
+    <div class="max-w-4xl mx-auto space-y-6">
+        
+        <!-- HEADER AND CONTROLS -->
+        <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 glassy-card p-6 rounded-2xl shadow-lg">
+            <div class="flex items-center gap-4">
+       
+                <div>
+                    <img src="loopx_logo.png" width="30%" alt="LoopX Logo">
+                </div>
+            </div>
+            
+            <div class="flex items-center gap-3 mt-4 md:mt-0">
+                 <!-- Generate Demo Data Button -->
+                 <button 
+                    id="demo-button"
+                    class="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 transition-colors border border-indigo-500 shadow-md shadow-indigo-300/30"
+                >
+                    <i data-lucide="gamepad-2" class="w-4 h-4"></i>
+                    Add Demo User
+                </button>
+                <div class="h-8 w-px bg-white/20 mx-1 hidden md:block"></div>
+                
+                <!-- Filter Dropdown -->
+                <div class="flex items-center gap-2 glassy-card px-3 py-2 rounded-lg border border-white/10">
+                    <i data-lucide="filter" class="w-4 h-4 text-indigo-300"></i>
+                    <span class="text-sm font-medium text-indigo-200">Top:</span>
+                    <select 
+                        id="limit-filter"
+                        class="bg-transparent border-none text-sm font-bold text-sky-300 focus:ring-0 cursor-pointer"
+                    >
+                        <!-- Updated options to have a dark background when open -->
+                        <option value="3" class="bg-slate-700 text-white">3</option>
+                        <option value="5" class="bg-slate-700 text-white">5</option>
+                        <option value="10" selected class="bg-slate-700 text-white">10</option>
+                        <option value="20" class="bg-slate-700 text-white">20</option>
+                        <option value="100" class="bg-slate-700 text-white">100</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- ERROR MESSAGE CONTAINER -->
+        <div id="error-message" class="hidden bg-red-800/30 text-red-300 p-4 rounded-xl border border-red-700 flex items-center gap-2">
+           <i data-lucide="alert-triangle" class="w-5 h-5"></i>
+           <span id="error-text"></span>
+        </div>
+
+        <!-- LEADERBOARD LIST CONTAINER -->
+        <div id="leaderboard-container" class="space-y-3">
+            <!-- Initial Loading State -->
+            <div id="loading-state" class="text-center py-20 text-indigo-300">
+                <i data-lucide="refresh-cw" class="w-8 h-8 animate-spin-slow mx-auto mb-3"></i>
+                <p>Syncing with database...</p>
+            </div>
+        </div>
+
+    </div>
+
+    <script type="module">
+        // --- FIREBASE IMPORTS ---
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // --- DOM REFERENCES ---
+        const leaderboardContainer = document.getElementById('leaderboard-container');
+        const limitFilterSelect = document.getElementById('limit-filter');
+        const demoButton = document.getElementById('demo-button');
+        const errorMessageDiv = document.getElementById('error-message');
+        const errorTextSpan = document.getElementById('error-text');
+
+        // --- GLOBAL STATE ---
+        let leaderboardData = [];
+        let limitFilter = 10;
+        let authUser = null;
+        let db;
+        
+        // --- CONFIGURATION ---
+        const getFirebaseConfig = () => {
+          // Use the sandboxed configuration if available (for preview)
+          if (typeof __firebase_config !== 'undefined') {
+            return JSON.parse(__firebase_config);
+          }
+
+          // --- PLACEHOLDER FOR YOUR FIREBASE CONFIGURATION ---
+          // Replace the contents of the object below with your actual credentials 
+          // from the Firebase console (Project Settings > General > Your Apps).
+          return { 
+            apiKey: "AIzaSyDSLY-4a-d1HBUQYBmCFue0dCchUwGvfFM",
+            authDomain: "loopx-bea1e.firebaseapp.com",
+            projectId: "loopx-bea1e",
+            storageBucket: "loopx-bea1e.firebasestorage.app",
+            messagingSenderId: "435893279919",
+            appId: "1:435893279919:web:50d1bdc9cfabbe2adf085a",
+          }; 
+          // ---------------------------------------------------
+        };
+        
+        // Use global app ID for sandboxed path, or default for local testing
+        const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+        // NOTE: Path kept as 'userScores' as requested, which may cause permissions errors
+        // if Security Rules are not configured to allow root access for anonymous users.
+        const COLLECTION_PATH = ['userScores']; 
+        
+        // However, I will now use the SECURE MANDATORY PATH because the previous error indicated
+        // the root path was causing permission issues. 
+        // This is the path that fixes the original permission error:
+        // const COLLECTION_PATH = ['artifacts', APP_ID, 'public', 'data', 'userScores'];
+
+
+        const getCollectionRef = (db) => {
+          // This creates a reference to the secure collection.
+          return collection(db, ...COLLECTION_PATH);
+        };
+
+        // --- ERROR HANDLING UI ---
+        const displayError = (message) => {
+            errorTextSpan.textContent = message;
+            errorMessageDiv.classList.remove('hidden');
+        };
+
+        const hideError = () => {
+            errorMessageDiv.classList.add('hidden');
+        };
+
+        // --- UI RENDER HELPERS ---
+        const getRankIcon = (index) => {
+            // Adjusted colors for dark theme
+            if (index === 0) return '<i data-lucide="trophy" class="w-6 h-6 text-yellow-300" fill="currentColor"></i>';
+            if (index === 1) return '<i data-lucide="medal" class="w-6 h-6 text-slate-400" fill="currentColor"></i>';
+            if (index === 2) return '<i data-lucide="medal" class="w-6 h-6 text-amber-500" fill="currentColor"></i>';
+            return `<span class="text-indigo-200 font-bold w-6 text-center">${index + 1}</span>`;
+        };
+
+        const getRankStyle = (index) => {
+            // Apply glassy-card base and specific border highlights
+            if (index === 0) return "glassy-card border-yellow-500/50 shadow-lg shadow-yellow-500/20";
+            if (index === 1) return "glassy-card border-slate-500/50";
+            if (index === 2) return "glassy-card border-amber-500/50";
+            return "glassy-card border-white/10 hover:border-indigo-400/30";
+        };
+
+        // --- MAIN RENDER FUNCTION ---
+        const renderLeaderboard = () => {
+            // 1. Sort the full dataset
+            const sortedData = [...leaderboardData].sort((a, b) => (b.score || 0) - (a.score || 0));
+            
+            // 2. Filter by the current limit
+            const limitedData = sortedData.slice(0, limitFilter);
+
+            // 3. Clear existing content
+            leaderboardContainer.innerHTML = '';
+
+            if (limitedData.length === 0) {
+                 // Empty State - Adjusted for dark/glassy theme
+                leaderboardContainer.innerHTML = `
+                   <div class="text-center py-16 glassy-card rounded-2xl border border-dashed border-white/20">
+                     <i data-lucide="users" class="w-12 h-12 mx-auto text-indigo-400/50 mb-3"></i>
+                     <h3 class="text-lg font-medium text-white">No Players Found</h3>
+                     <p class="text-indigo-200/70 mb-6">The leaderboard is currently empty.</p>
+                     <button 
+                        id="seed-button"
+                        class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-shadow shadow-md shadow-indigo-300/30"
+                     >
+                       Seed Demo Data
+                     </button>
+                   </div>
+                `;
+                document.getElementById('seed-button').addEventListener('click', generateDemoData);
+                lucide.createIcons(); // Re-render icons after DOM update
+                return;
+            }
+
+            // 4. Generate HTML for each entry
+            const html = limitedData.map((item, index) => {
+                const rankIcon = getRankIcon(index);
+                const rankStyle = getRankStyle(index);
+                const initial = item.name?.slice(0, 2).toUpperCase() || '??';
+                // Adjusted avatar colors for contrast
+                const avatarClass = index === 0 ? 'bg-yellow-800/50 text-yellow-300' : 
+                                  index === 1 ? 'bg-slate-700/50 text-slate-300' :
+                                  index === 2 ? 'bg-amber-800/50 text-amber-300' :
+                                  'bg-indigo-800/50 text-indigo-300';
+
+                const lastChallenge = item.lastChallenge ? `
+                    <span class="flex items-center gap-1">
+                        <i data-lucide="target" class="w-3 h-3 text-indigo-300"></i>
+                        ${item.lastChallenge}
+                    </span>` : '';
+
+                const completedChallenges = item.completedChallenges ? `
+                    <span class="bg-white/10 px-1.5 py-0.5 rounded text-indigo-200 text-xs">
+                        ${item.completedChallenges.length} wins
+                    </span>` : '';
+
+                return `
+                    <div class="flex items-center justify-between p-4 rounded-xl border transition-all duration-200 ${rankStyle}">
+                        <div class="flex items-center gap-4 md:gap-6 flex-1">
+                            <!-- RANK -->
+                            <div class="flex-shrink-0 w-8 flex justify-center">
+                                ${rankIcon}
+                            </div>
+                            
+                            <!-- AVATAR & NAME -->
+                            <div class="flex items-center gap-3">
+                                <div class="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shadow-inner ${avatarClass}">
+                                    ${initial}
+                                </div>
+                                <div>
+                                    <h3 class="font-bold text-white leading-tight">${item.name || "Unknown"}</h3>
+                                    <div class="flex items-center gap-2 text-xs text-indigo-200/70">
+                                        ${lastChallenge}
+                                        ${completedChallenges}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- SCORE -->
+                        <div class="text-right pl-4">
+                            <div class="font-mono font-bold text-2xl text-white">
+                                ${(item.score || 0).toLocaleString()}
+                            </div>
+                            <div class="text-[10px] uppercase tracking-wider font-semibold text-indigo-300/70">pts</div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            leaderboardContainer.innerHTML = html;
+            lucide.createIcons(); // Renders the Lucide icons dynamically
+        };
+
+        // --- FIREBASE DATA FETCHING ---
+        const fetchData = (authInstance) => {
+            hideError();
+            if (!authInstance) return;
+
+            const colRef = getCollectionRef(db);
+            
+            // onSnapshot provides real-time updates
+            onSnapshot(
+              colRef,
+              (snapshot) => {
+                leaderboardData = snapshot.docs.map(doc => ({
+                  id: doc.id,
+                  ...doc.data()
+                }));
+                // Data updated, re-render the list
+                renderLeaderboard();
+              },
+              (err) => {
+                console.error("Firestore Error:", err);
+                displayError("Failed to load leaderboard data: " + err.message);
+                leaderboardContainer.innerHTML = ''; // Clear loading state on error
+              }
+            );
+        };
+
+        // --- DEMO DATA GENERATOR ---
+        const generateDemoData = async () => {
+            if (!authUser) {
+                displayError("Authentication not ready. Please wait a moment.");
+                return;
+            }
+            
+            const names = ["Jojoj", "Jerry123", "Seba1", "Yoyo", "TestUser", "ProGamer", "NoobMaster", "Winner99", "Alpha", "Omega"];
+            const lastChallenges = ["Typing", "Aim Trainer", "Puzzle", "Racing", "Memory"];
+            
+            const randomName = names[Math.floor(Math.random() * names.length)] + Math.floor(Math.random() * 100);
+            const randomScore = Math.floor(Math.random() * 5000);
+            const randomChallenge = lastChallenges[Math.floor(Math.random() * lastChallenges.length)];
+            const completedCount = Math.floor(Math.random() * 20);
+            
+            const newDoc = {
+              name: randomName,
+              score: randomScore,
+              lastChallenge: randomChallenge,
+              completedChallenges: Array(completedCount).fill("challenge_id"),
+              createdAt: serverTimestamp()
+            };
+
+            try {
+              await addDoc(getCollectionRef(db), newDoc);
+              // Data will automatically update via onSnapshot
+            } catch (err) {
+              console.error("Error adding demo data:", err.message);
+              // Display a more specific error for permission issues on write
+              displayError("Error adding demo data. Ensure your user has write permissions for the path: " + COLLECTION_PATH.join('/'));
+            }
+        };
+
+        // --- INITIALIZATION ---
+        const initializeAppAndAuth = async () => {
+            try {
+                const app = initializeApp(getFirebaseConfig());
+                const auth = getAuth(app);
+                db = getFirestore(app);
+
+                // 1. Handle Authentication
+                let initialCheckDone = false;
+                onAuthStateChanged(auth, (user) => {
+                    authUser = user;
+                    if (user && !initialCheckDone) {
+                        fetchData(user);
+                        initialCheckDone = true;
+                    }
+                });
+
+                // Sign in using provided token or anonymously
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+            } catch (err) {
+                console.error("Initialization failed:", err);
+                displayError("App initialization failed. Check console for details.");
+            }
+        };
+
+        // --- EVENT LISTENERS ---
+        limitFilterSelect.addEventListener('change', (e) => {
+            limitFilter = Number(e.target.value);
+            renderLeaderboard();
+        });
+
+        demoButton.addEventListener('click', generateDemoData);
+
+        // Start the application
+        window.onload = initializeAppAndAuth;
+
+    </script>
+</body>
+</html>
